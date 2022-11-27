@@ -1,0 +1,4 @@
+chromedriver
+Pipfile.lock
+.venv
+.vscode
