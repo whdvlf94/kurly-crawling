@@ -66,7 +66,7 @@ class KurlyClient:
     :상품의 리뷰를 조회할 수 있는 메서드
     """
     def __init__(self, token: str) -> None:
-        self.token = token
+        self._token = token
         self.headers = self.get_headers(token)
 
     def get_headers(self, token: str):
@@ -88,10 +88,21 @@ class KurlyClient:
 
     async def get_best_items(self, per_page: int = 50):
         """
-        :per_page : str
+        :per_page : int
         :상품 개수를 뜻하는 파라미터로 수집하고 싶은 베스트 상품 개수를 입력하면 됨(기본 값으로 50개의 상품을 조회하도록 설정)
         """
         url = f"https://api.kurly.com/collection/v2/home/product-collections/market-best/products?sort_type=4&page=1&per_page={per_page}"
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url=url, headers=self.headers) as resp:
+                return await resp.json()
+
+    async def get_review_over_items(self, review_over_count: int = 1000):
+        """
+        :review_over_count: int
+        :후기 개수가 특정 수 이상을 돌파한 개수를 입력하면 됨. 별도로 입력하지 않을 경우 후기 1,000개 돌파한 상품이 조회됨 \n
+        (500, 1000, 5000, 10000 단위로 조회 가능)
+        """
+        url = f"https://api.kurly.com/collection/v2/home/product-collections/review-over-{review_over_count}/products?sort_type=4&page=1&per_page=96&filters="
         async with aiohttp.ClientSession() as session:
             async with session.get(url=url, headers=self.headers) as resp:
                 return await resp.json()
@@ -113,10 +124,11 @@ class KurlyClient:
          (전체 리뷰를 호출할 경우 IP가 일시 차단될 수 있으니 주의)
 
         :sort_type : str
-        :리뷰 조회시 필터 조건을 '최신순', '추천순'을 선택하여 조회할 수 있는 파라미터. 기본 값으로는 '최신순'으로 수집하도록 설정
+        :리뷰 조회시 필터 조건을 '최신순(RECENTLY)', '추천순(RECOMMEND)'을 선택하여 조회할 수 있는 파라미터. 기본 값으로는 '최신순'으로 수집하도록 설정
         """
         if size is None:
             size = await self.get_review_count(product_no)
+
         url = f"https://api.kurly.com/product-review/v1/contents-products/{product_no}/reviews?sortType={sort_type}&size={size}"
         async with aiohttp.ClientSession() as session:
             async with session.get(url=url, headers=self.headers) as resp:
@@ -126,20 +138,20 @@ class DataParse:
     """
     Kurly API를 활용하여 수집한 데이터를 엑셀 양식에 맞게 가공하는 class
 
-    :item_parse
+    :items
     :상품 정보를 가공하는 메서드
 
-    :review_parse
+    :reviews
     :리뷰 정보를 가공하는 메서드
     """
-    def __init__(self, items: list, reviews: list, token: str) -> None:
-        self.items = items
-        self.reviews = reviews
-        self.token = token
+    def __init__(self, items: list = None, reviews: list = None, token: str = None) -> None:
+        self._items = items
+        self._reviews = reviews
+        self._token = token
         
-    async def item_parse(self):
+    async def items(self):
         result = []
-        for _, item in enumerate(self.items["data"]):
+        for _, item in enumerate(self._items["data"]):
             item_no = item["no"]
             item_name = item["name"]
             item_name_length = len(item["name"].replace(" ", ""))
@@ -176,9 +188,10 @@ class DataParse:
             category = ""
             purchase_benefits = ""
 
-            client = KurlyClient(self.token)
+            client = KurlyClient(self._token)
             reviews_count = await client.get_review_count(item["no"])
             # reviews_count = ""
+            review_over_count = item["review_over"]
             result.append(
                 [
                     str(item_no),
@@ -196,55 +209,58 @@ class DataParse:
                     category,
                     purchase_benefits,
                     reviews_count,
+                    review_over_count,
                 ]
             )
         return result
 
-    def review_parse(self):
+    def reviews(self):
         result = []
-        for product in self.reviews:
+        for product in self._reviews:
             for item in product["data"]:
-                
-                review_elapsed_days = ((datetime.utcnow() + timedelta(hours=9)) - datetime.strptime(item["registeredAt"], "%Y-%m-%dT%H:%M:%S")).days
+                try:
+                    review_elapsed_days = ((datetime.utcnow() + timedelta(hours=9)) - datetime.strptime(item["registeredAt"], "%Y-%m-%dT%H:%M:%S")).days
 
-                if review_elapsed_days < 14:
+                    if review_elapsed_days < 14:
+                        continue
+                    
+                    product_no = item["contentsProductNo"]
+                    owner_grade = item["ownerGrade"]
+                    type = item["type"]
+                    contents = item["contents"]
+                    contents_length = len(item["contents"].replace(" ", ""))
+
+                    if item["images"]:
+                        is_included_image = 1
+                        image_count = len(item["images"])
+                    else:
+                        is_included_image = 0
+                        image_count = 0
+                    
+                    like_count = item["likeCount"]
+                    registered_at = datetime.strptime(item["registeredAt"], "%Y-%m-%dT%H:%M:%S").strftime("%Y-%m-%d")
+                    result.append(
+                    [
+                        str(product_no),
+                        owner_grade,
+                        type,
+                        contents,
+                        contents_length,
+                        is_included_image,
+                        image_count,
+                        like_count,
+                        datetime.strptime(registered_at, "%Y-%m-%d"),
+                        review_elapsed_days,
+                    ]
+                    ) 
+                except Exception as e:
+                    print(e)
                     continue
-                
-                product_no = item["contentsProductNo"]
-                owner_grade = item["ownerGrade"]
-                type = item["type"]
-                contents = item["contents"]
-                contents_length = len(item["contents"].replace(" ", ""))
-
-                if item["images"]:
-                    is_included_image = 1
-                    image_count = len(item["images"])
-                else:
-                    is_included_image = 0
-                    image_count = 0
-                
-                like_count = item["likeCount"]
-                registered_at = datetime.strptime(item["registeredAt"], "%Y-%m-%dT%H:%M:%S")
-                
-                result.append(
-                [
-                    str(product_no),
-                    owner_grade,
-                    type,
-                    contents,
-                    contents_length,
-                    is_included_image,
-                    image_count,
-                    like_count,
-                    registered_at,
-                    review_elapsed_days,
-                ]
-            )
     
         return result
 
     async def to_excel(self,file_name: str = "output"):
-        parsed_items = await self.item_parse()
+        parsed_items = await self.items()
         item_data = pd.DataFrame(
             data=parsed_items,
             columns=[
@@ -263,10 +279,11 @@ class DataParse:
                 "카테고리",
                 "구매해택",
                 "총 후기 개수",
+                "돌파 리뷰 개수",
             ],
         )
 
-        parsed_reviews = self.review_parse()
+        parsed_reviews = self.reviews()
         review_data = pd.DataFrame(
             data=parsed_reviews,
             columns=[
@@ -289,6 +306,39 @@ class DataParse:
             item_data.to_excel(writer, sheet_name="Items")
             review_data.to_excel(writer, sheet_name="Reviews")
 
+async def get_best_items(client: KurlyClient):
+    """
+    Kurly의 베스트 상품 조회
+    """
+    best_items = await client.get_best_items(per_page=277)
+    tasks = [client.get_reviews(product_no=item["no"]) for item in best_items["data"]]
+    reviews = await asyncio.gather(*tasks)
+
+    return best_items, reviews
+
+
+async def get_review_over_itmes(client: KurlyClient):
+    """
+    Kurly의 특정 후기 개수 돌파 상품 조회
+    """
+    items = []
+    dataset = set()
+    for count in [10000,5000,1000]:
+        item_obj = await client.get_review_over_items(count)
+        for item in item_obj["data"]:
+            if item["no"] not in dataset:
+                item["review_over"] = count
+                items.append(item)
+                dataset.add(item["no"])
+    review_over_items = {"data":items}
+
+    tasks = [client.get_reviews(product_no=item["no"], size=1000, sort_type="RECOMMEND") for item in items]
+    reviews = await asyncio.gather(*tasks)
+
+    return review_over_items, reviews
+
+
+
 async def main():
 
     #Selenium Chrome driver setting
@@ -297,18 +347,19 @@ async def main():
     access_token = driver.get_bearer_token()
 
 
-    #REST API
+    #Kurly Client
     request_client = KurlyClient(access_token)
-    #Kurly의 베스트 상품 조회
-    #per_page는 상품 개수를 뜻함
-    best_items = await request_client.get_best_items(per_page=1)
-    tasks = [request_client.get_reviews(product_no=item["no"]) for item in best_items["data"]]
-    reviews = await asyncio.gather(*tasks)
 
+    #Best items
+    # items, reviews = await get_best_items(request_client)
 
+    #Review over items
+    items, reviews = await get_review_over_itmes(request_client)
+        
+    
     #Data 가공작업
-    data = DataParse(best_items, reviews, access_token)
-    await data.to_excel(file_name="item1")
+    data = DataParse(items=items, reviews=reviews, token=access_token)
+    await data.to_excel(file_name="item3")          
 
 
 if __name__ == "__main__":
